@@ -6,401 +6,621 @@
 #include <cstring>
 #include <random>
 #include <array>
+#include <string>
+#include <bits/stdc++.h>
 
-std::array<unsigned char, 16> generateAESKey() {
-  std::array<unsigned char, 16> key;
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<> dis(0, 255);
-    
-  for (auto &byte : key) {
-    byte = dis(gen);
-  }
 
-  return key;
+// The secret key
+std::array<BYTE, 16> skey;
+
+
+// The expanded secret key
+std::array<std::array<BYTE, 16>, 11> keys;
+
+// The current block of data that is being encrypted/decrypted
+BLOCK state;
+
+
+
+
+WORD xorWORD(const WORD& w1, const WORD& w2) {
+	WORD result;
+
+	for (u8 i = 0; i < 4; i++) {
+		result[i] = w1[i] ^ w2[i];
+	}
+
+	return result;
 }
 
-std::array<BYTE, 16> secret;
+BLOCK xorBLOCK(const BLOCK& b1, const BLOCK& b2) {
+	BLOCK result;
 
-WORD xorWORD(const WORD& word1, const WORD& word2) {
-    WORD result;
-    for (u8 i = 0; i < 4; i++) {
-        result[i] = word1[i] ^ word2[i];
-    }
-    return result;
-}
+	for (u8 i = 0; i < 16; i++) {
+		result[i] = b1[i] ^ b2[i];
+	}
 
-WORD g(const WORD& word, const BYTE& round) {
-  WORD w1 = {sbox[word[1]], sbox[word[2]], sbox[word[3]], sbox[word[0]]};
-  WORD w2 = {RC[round], 0x00, 0x00, 0x00};
-
-  return xorWORD(w1, w2);
-}
-
-std::array<WORD, 4> generateRoundKey(const std::array<WORD, 4>& previous, const BYTE& round) {
-  std::array<WORD, 4> roundKeys;
-
-  roundKeys[0] = xorWORD(g(previous[3], round), previous[0]);
-  roundKeys[1] = xorWORD(roundKeys[0], previous[1]);
-  roundKeys[2] = xorWORD(roundKeys[1], previous[2]);
-  roundKeys[3] = xorWORD(roundKeys[2], previous[3]);
-
-  return roundKeys;
+	return result;
 }
 
 
-std::array<std::array<WORD, 4>, 11> keyList;
 
-void printKeyList(const std::array<std::array<WORD, 4>, 11>& keyList) {
-    for (size_t round = 0; round < keyList.size(); ++round) {
-        std::cout << "Round " << round << " Key:" << std::endl;
-        for (const auto& word : keyList[round]) {
-            for (const auto& byte : word) {
-                std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte) << " ";
-            }
-            std::cout << std::endl;
+
+
+void populateKeys(const std::array<BYTE, 16>& secret) {
+	keys[0] = secret;
+
+	WORD last;
+	for (u8 j = 0; j < 4; j++) {
+		last[j] = keys[0][j + 12];
+	}
+
+	for (u8 i = 1; i <= 10; i++) {
+		// g():
+		WORD transformed = {sbox[(last[1])], sbox[(last[2])], sbox[(last[3])], sbox[(last[0])]};
+		WORD roundconst =  {rcon[i], 0x00, 0x00, 0x00};
+		last = xorWORD(transformed, roundconst);
+		
+		// w[0]:
+		keys[i][0] = keys[i-1][0] ^ last[0];
+		keys[i][1] = keys[i-1][1] ^ last[1];
+		keys[i][2] = keys[i-1][2] ^ last[2];
+		keys[i][3] = keys[i-1][3] ^ last[3];
+
+		// w[1]:
+		keys[i][4] = keys[i-1][4] ^ keys[i][0];
+		keys[i][5] = keys[i-1][5] ^ keys[i][1];
+		keys[i][6] = keys[i-1][6] ^ keys[i][2];
+		keys[i][7] = keys[i-1][7] ^ keys[i][3];
+
+		// w[2]:
+		keys[i][8]  = keys[i-1][8]  ^ keys[i][4];
+		keys[i][9]  = keys[i-1][9]  ^ keys[i][5];
+		keys[i][10] = keys[i-1][10] ^ keys[i][6];
+		keys[i][11] = keys[i-1][11] ^ keys[i][7];
+
+		// w[3]:
+		keys[i][12] = keys[i-1][12] ^ keys[i][8];
+		keys[i][13] = keys[i-1][13] ^ keys[i][9];
+		keys[i][14] = keys[i-1][14] ^ keys[i][10];
+		keys[i][15] = keys[i-1][15] ^ keys[i][11];
+
+		// Restore last:
+		for (u8 j = 0; j < 4; j++) {
+			last[j] = keys[i][j + 12];
+		}
+	}
+}
+
+
+void printKeys(const std::array<std::array<BYTE, 16>, 11>& keys) {
+    for (const auto& row : keys) {
+        for (const auto& byte : row) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte) << " ";
         }
         std::cout << std::endl;
     }
 }
 
-void populateKeys() {
-  std::array<WORD, 4> initial;
-  initial[0] = { secret[0],  secret[1],  secret[2],  secret[3]};
-  initial[1] = { secret[4],  secret[5],  secret[6],  secret[7]};
-  initial[2] = { secret[8],  secret[9], secret[10], secret[11]};
-  initial[3] = {secret[12], secret[13], secret[14], secret[15]};
 
-  keyList[0] = initial;
 
-  for (u8 i = 1; i <= 10; i++) {
-    keyList[i] = generateRoundKey(keyList[i-1], i);
-  }
+void SubBytes() {
+	for (u8 i = 0; i < 16; i++) {
+		state[i] = sbox[(state[i])];
+	}
+}
+
+void InvSubBytes() {
+	for (u8 i = 0; i < 16; i++) {
+		state[i] = inv_sbox[(state[i])];
+	}
 }
 
 
 
 
-// Current state that will be encrypted (128bit block)
-BYTE state[4][4];
+void ShiftRows() {
+	BYTE temp;
+	
+	temp = state[4];
+	state[4] = state[5];
+	state[5] = state[6];
+	state[6] = state[7];
+	state[7] = temp;
+
+	std::swap(state[8], state[10]);
+	std::swap(state[9], state[11]);
+
+	temp = state[15];
+	state[15] = state[14];
+	state[14] = state[13];
+	state[13] = state[12];
+	state[12] = temp;
+}
+
+void InvShiftRows() {
+	BYTE temp;
+
+	temp = state[7];
+	state[7] = state[6];
+	state[6] = state[5];
+	state[5] = state[4];
+	state[4] = temp;
+
+	std::swap(state[11], state[9]);
+	std::swap(state[10], state[8]);
+
+	temp = state[12];
+	state[12] = state[13];
+	state[13] = state[14];
+	state[14] = state[15];
+	state[15] = temp;
+}
 
 
-void populateState(BYTE* data, u64 offset) {
-  for (u8 i = 0; i < 4; i++) {
-    for (u8 j = 0; j < 4; j++) {
-      state[i][j] = data[offset + 4*i + j];
+void MixColumn(BYTE* d0, BYTE* d1, BYTE* d2, BYTE* d3) {
+	const BYTE b[4] = {*d0, *d1, *d2, *d3};
+
+	*d0 = gmul2[(b[0])] ^ gmul3[(b[1])] ^ (b[2]) ^ (b[3]);
+	*d1 = (b[0]) ^ gmul2[(b[1])] ^ gmul3[(b[2])] ^ (b[3]);
+	*d2 = (b[0]) ^ (b[1]) ^ gmul2[(b[2])] ^ gmul3[(b[3])];
+	*d3 = gmul3[(b[0])] ^ (b[1]) ^ (b[2]) ^ gmul2[(b[3])];
+}
+
+void MixColumns() {
+	MixColumn(&state[0], &state[4], &state[8],  &state[12]);
+	MixColumn(&state[1], &state[5], &state[9],  &state[13]);
+	MixColumn(&state[2], &state[6], &state[10], &state[14]);
+	MixColumn(&state[3], &state[7], &state[11], &state[15]);
+}
+
+void InvMixColumn(BYTE* b0, BYTE* b1, BYTE* b2, BYTE* b3) {
+	const BYTE d[4] = {*b0, *b1, *b2, *b3};
+
+	*b0 = gmul14[(d[0])] ^ gmul11[(d[1])] ^ gmul13[(d[2])] ^ gmul9[(d[3])];
+	*b1 = gmul9[(d[0])] ^ gmul14[(d[1])] ^ gmul11[(d[2])] ^ gmul13[(d[3])];
+	*b2 = gmul13[(d[0])] ^ gmul9[(d[1])] ^ gmul14[(d[2])] ^ gmul11[(d[3])];
+	*b3 = gmul11[(d[0])] ^ gmul13[(d[1])] ^ gmul9[(d[2])] ^ gmul14[(d[3])];
+}
+
+void InvMixColumns() {
+	InvMixColumn(&state[0], &state[4], &state[8],  &state[12]);
+	InvMixColumn(&state[1], &state[5], &state[9],  &state[13]);
+	InvMixColumn(&state[2], &state[6], &state[10], &state[14]);
+	InvMixColumn(&state[3], &state[7], &state[11], &state[15]);
+}
+
+
+void PopulateState(BYTE* data, u64 offset) {
+  for (u8 i = 0; i < 16; i++) {
+    state[i] = *(offset + data + i);
+  }
+}
+
+void PopulateOutput(BYTE* data, u64 offset) {
+  for (u8 i = 0; i < 16; i++) {
+    *(offset + data + i) = state[i];
+  }
+}
+
+void printState() {
+  for (size_t i = 0; i < 4; ++i) {
+    for (size_t j = 0; j < 4; ++j) {
+      std::cout << "0x" << std::hex << std::setw(2) << std::setfill('0') 
+                << static_cast<int>(state[i * 4 + j]) << " ";
     }
+    std::cout << std::endl;
   }
 }
 
-void populateOutput(BYTE* output, u64 offset) {
-  for (u8 i = 0; i < 4; i++) {
-    for (u8 j = 0; j < 4; j++) {
-      output[4*i + j] = state[i][j];
-    }
-  }
-}
-
-void addRoundKey(const u8& round) {
-  for (u8 i = 0; i < 4; i++) {
-    for (u8 j = 0; j < 4; j++) {
-      state[i][j] ^= keyList[round][i][j];
-    }
-  }
-}
-
-void subBytes() {
-  for (u8 i = 0; i < 4; i++) {
-    for (u8 j = 0; j < 4; j++) {
-      state[i][j] = sbox[state[i][j]];
-    }
-  }
-}
-
-void subBytesInverse() {
-  for (u8 i = 0; i < 4; i++) {
-    for (u8 j = 0; j < 4; j++) {
-      state[i][j] = inv_sbox[state[i][j]];
-    }
-  }
-}
-
-
-void shiftRows() {
-  BYTE temp;
-
-  temp = state[1][0];
-  state[1][0] = state[1][1];
-  state[1][1] = state[1][2];
-  state[1][2] = state[1][3];
-  state[1][3] = temp;
-
-  temp = state[2][0];
-  state[2][0] = state[2][2];
-  state[2][2] = temp;
-  temp = state[2][1];
-  state[2][1] = state[2][3];
-  state[2][3] = temp;
-
-  temp = state[3][0];
-  state[3][0] = state[3][3];
-  state[3][3] = state[3][2];
-  state[3][2] = state[3][1];
-  state[3][1] = temp;
-}
-
-void shiftRowsInverse() {
-    BYTE temp;
-
-    temp = state[1][3];
-    state[1][3] = state[1][2];
-    state[1][2] = state[1][1];
-    state[1][1] = state[1][0];
-    state[1][0] = temp;
-
-    temp = state[2][0];
-    state[2][0] = state[2][2];
-    state[2][2] = temp;
-    temp = state[2][1];
-    state[2][1] = state[2][3];
-    state[2][3] = temp;
-
-    temp = state[3][0];
-    state[3][0] = state[3][1];
-    state[3][1] = state[3][2];
-    state[3][2] = state[3][3];
-    state[3][3] = temp;
-}
-
-void mixSingleColumn(std::array<BYTE, 4> r) {
-  BYTE a[4];
-  BYTE b[4];
-  u8 c;
-  u8 h;
-
-  /* The array 'a' is simply a copy of the input array 'r'
-  * The array 'b' is each element of the array 'a' multiplied by 2
-  * in Rijndael's Galois field
-  * a[n] ^ b[n] is element n multiplied by 3 in Rijndael's Galois field */ 
-  for(c = 0; c < 4; c++) {
-    a[c] = r[c];
-    /* h is 0xff if the high bit of r[c] is set, 0 otherwise */
-    h = (unsigned char)((signed char)r[c] >> 7); /* arithmetic right shift, thus shifting in either zeros or ones */
-    b[c] = r[c] << 1; /* implicitly removes high bit because b[c] is an 8-bit char, so we xor by 0x1b and not 0x11b in the next line */
-    b[c] ^= 0x1B & h; /* Rijndael's Galois field */
-  }
-
-  r[0] = b[0] ^ a[3] ^ a[2] ^ b[1] ^ a[1]; /* 2 * a0 + a3 + a2 + 3 * a1 */
-  r[1] = b[1] ^ a[0] ^ a[3] ^ b[2] ^ a[2]; /* 2 * a1 + a0 + a3 + 3 * a2 */
-  r[2] = b[2] ^ a[1] ^ a[0] ^ b[3] ^ a[3]; /* 2 * a2 + a1 + a0 + 3 * a3 */
-  r[3] = b[3] ^ a[2] ^ a[1] ^ b[0] ^ a[0]; /* 2 * a3 + a2 + a1 + 3 * a0 */
-}
-
-void mixColumns() {
-  std::array<BYTE, 4> temp;
-
-  for(u8 i = 0; i < 4; i++)
-  {
-    for(u8 j = 0; j < 4; j++)
-    {
-      temp[j] = state[j][i];
-    }
-    
-    mixSingleColumn(temp);
-
-    for(u8 j = 0; j < 4; j++)
-    {
-      state[j][i] = temp[j];
-    }
-  }
-}
-
-BYTE gmul(BYTE a, BYTE b) {
-  uint8_t p = 0;
-  uint8_t hi_bit_set;
-  for (int i = 0; i < 8; i++) {
-    if (b & 1) {
-      p ^= a;
-    }
-    hi_bit_set = (a & 0x80);
-    a <<= 1;
-    if (hi_bit_set) {
-      a ^= 0x1b; // x^8 + x^4 + x^3 + x + 1
-    }
-    b >>= 1;
-  }
-  return p;
-}
-
-void mixSingleColumnInverse(std::array<BYTE, 4> r) {
-  static const std::array<BYTE, 4> inv_matrix = {0x0e, 0x0b, 0x0d, 0x09};
-
-  std::array<BYTE, 4> temp;
-
-  for (u8 i = 0; i < 4; i++) {
-    temp[i] = gmul(inv_matrix[0], r[i]) ^
-              gmul(inv_matrix[1], r[(i + 1) % 4]) ^
-              gmul(inv_matrix[2], r[(i + 2) % 4]) ^
-              gmul(inv_matrix[3], r[(i + 3) % 4]);
-  }
-
-  for (u8 i = 0; i < 4; i++) {
-    r[i] = temp[i];
-  }
-}
-
-void mixColumnsInverse() {
-  std::array<BYTE, 4> temp;
-
-  for (u8 i = 0; i < 4; i++) {
-    for (u8 j = 0; j < 4; j++) {
-      temp[j] = state[j][i];
-    }
-
-    mixSingleColumnInverse(temp);
-
-    for (u8 j = 0; j < 4; j++) {
-      state[j][i] = temp[j];
-    }
-  }
-}
-
-BYTE* encrypt(BYTE* data, u64 size) {
-  BYTE* output = new BYTE(size);
-
+void encrypt(BYTE* data, BYTE* encrypted, u64 size) {
   u64 offset = 0;
+
+
   while (offset < size) {
-    populateState(data, offset);
+    PopulateState(data, offset);
 
     // Round 0:
-    addRoundKey(0);
+    state = xorBLOCK(state, keys[0]);
     
     // Rounds 1-9:
-    for (u8 i = 0; i < 10; i++) {
-      subBytes();
-      shiftRows();
-      mixColumns();
-      addRoundKey(i);
+    for (u8 i = 1; i <= 9; i++) {
+      SubBytes();
+      ShiftRows();
+      MixColumns();
+      state = xorBLOCK(state, keys[i]);
     }
 
     // Round 10
-    subBytes();
-    shiftRows();
-    addRoundKey(10);
-  
-    populateOutput(output, offset);
+    SubBytes();
+    ShiftRows();
+    state = xorBLOCK(state, keys[10]);
 
+    PopulateOutput(encrypted, offset);
 
     offset += 16;
   }
-
-  return output;
 }
 
-BYTE* decrypt(BYTE* data, u64 size) {
-  BYTE* output = new BYTE[size];
 
+void decrypt(BYTE* data, BYTE* decrypted, u64 size) {
   u64 offset = 0;
+
   while (offset < size) {
-    populateState(data, offset);
+    PopulateState(data, offset);
 
-    // Round 10 (inverse operations)
-    addRoundKey(10);
-    shiftRowsInverse();
-    subBytesInverse();
+    // Round 10:
+    state = xorBLOCK(state, keys[10]);
+    InvShiftRows();
+    InvSubBytes();
 
-    // Rounds 9-1 (inverse operations)
-    for (u8 i = 9; i > 0; i--) {
-      addRoundKey(i);
-      mixColumnsInverse();
-      shiftRowsInverse();
-      subBytesInverse();
+    // Rounds 9-1:
+    for (u8 i = 9; i >= 1; i--) {
+      state = xorBLOCK(state, keys[i]);
+      InvMixColumns();
+      InvShiftRows();
+      InvSubBytes();
     }
 
-    // Round 0 (inverse operation)
-    addRoundKey(0);
+    // Round 0:
+    state = xorBLOCK(state, keys[0]);
 
-    populateOutput(output, offset);
+    PopulateOutput(decrypted, offset);
 
     offset += 16;
   }
-
-  return output;
 }
 
-BYTE* padData(const BYTE* data, u64& size) {
-  u64 newSize = size;
-  if (size % 16 != 0) {
-    newSize = (size / 16 + 1) * 16;
+
+bool setSecret(const char* key) {
+  if (strlen(key) != 32) {
+    return false;
   }
-  BYTE* paddedData = new BYTE[newSize];
-  memcpy(paddedData, data, size);
-  memset(paddedData + size, 0, newSize - size);  // Pad with zeros
-  size = newSize;
-  return paddedData;
+
+  for (u8 i = 0; i < 16; i++) {
+    BYTE hex1 = key[2*i];
+    BYTE hex2 = key[2*i + 1];
+
+    if (hex1 >= '0' && hex1 <= '9') {
+        hex1 =  hex1 - '0';
+    } else if (hex1 >= 'a' && hex1 <= 'f') {
+        hex1 = hex1 - 'a' + 10;
+    } else if (hex1 >= 'A' && hex1 <= 'F') {
+        hex1 = hex1 - 'A' + 10;
+    } else {
+      return false;
+    }
+
+    if (hex2 >= '0' && hex2 <= '9') {
+        hex2 =  hex2 - '0';
+    } else if (hex2 >= 'a' && hex2 <= 'f') {
+        hex2 = hex2 - 'a' + 10;
+    } else if (hex2 >= 'A' && hex2 <= 'F') {
+        hex2 = hex2 - 'A' + 10;
+    } else {
+      return false;
+    }
+
+    skey[i] = 16*hex1 + hex2;
+  }
+
+  return true;
 }
 
-int main() {
 
-  // Check if a key has been generated
-  //std::fstream file("./.secret", std::ios::binary);
-  //if (not file.good()) {
-    //file.close();
-    //file.open("./.secret", std::ios::binary | std::ios::out);
+bool getKey() {
+  const std::string filename = std::string(getenv("HOME")) + "/.secret";
+  std::ifstream file(filename);
 
-    //secret = generateAESKey();
-    //file.write(reinterpret_cast<const char*>(secret.data()), secret.size());
-    //file.close();
-  //}
-  //else {
-    //file.read(reinterpret_cast<char*>(secret.data()), secret.size());
-    //file.close();
-  //}  
-  //std::cout << "Read AES-128 Key: ";
-    //for (const auto &byte : secret) {
-        //std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte);
-    //}
-    //std::cout << std::endl;
-  //
-  //
-  secret = generateAESKey();
-  populateKeys();
-  
-std::string inputText = "0123456789abcdef";  // Example input text
 
-  // Convert text to binary data
-  const BYTE* inputData = reinterpret_cast<const BYTE*>(inputText.data());
-  u64 dataSize = inputText.size();
-
-  // Pad the data
-  BYTE* paddedData = padData(inputData, dataSize);
-
-  // Encrypt the data
-  BYTE* encryptedData = encrypt(paddedData, dataSize);
-
-  // Output the encrypted data (for demonstration purposes)
-  std::cout << "Encrypted Data:" << std::endl;
-  for (u64 i = 0; i < dataSize; ++i) {
-    std::cout << std::hex << static_cast<int>(encryptedData[i]) << " ";
+  if (!file.is_open()) {
+      return false; 
   }
-  std::cout << std::endl;
 
-  // Decrypt the data
-  BYTE* decryptedData = decrypt(encryptedData, dataSize);
+  std::string key;
+  file >> key;
 
-  // Output the decrypted data (for demonstration purposes)
-  std::cout << "Decrypted Data:" << std::endl;
-  for (u64 i = 0; i < dataSize; ++i) {
-    std::cout << decryptedData[i];
+  if (!file.good() || key.length() != 32) {
+    return false;
   }
-  std::cout << std::endl;
 
-  // Clean up
-  delete[] paddedData;
-  delete[] encryptedData;
-  delete[] decryptedData;
+  return setSecret(key.c_str());
+}
 
-  return 0;  
 
+bool fileExists(const std::string& filename) {
+  std::ifstream file(filename);
+  return file.good();
+}
+
+std::string generateUniqueFilename(const std::string& originalFilename) {
+    std::string newFilename = originalFilename + ".lock";
+    int counter = 1;
+
+    // While the file with the newFilename exists, keep modifying it
+    while (fileExists(newFilename)) {
+        std::ostringstream oss;
+        oss << originalFilename << "_" << counter++ << ".lock";
+        newFilename = oss.str();
+    }
+
+    return newFilename;
+}
+
+int main(int argc, char* argv[]) {
+  if (argc < 2) {
+    std::cout << "error: No arguments provided!" << std::endl;
+
+    return -1;
+  }
+
+  if (strcmp(argv[1], "encrypt") == 0) {
+    if (argc == 2) {
+      std::cout << "error: Too few arguments provided! Try entering a file to encrypt!" << std::endl;
+
+      return -1;
+    }
+
+    std::string filename = argv[2];
+    
+    // Step 0: Check if a key has been provided and if destructive mode has been set
+    // Step 1: Check if file exists
+    // Step 2: Read the binary data of the file in a variable
+    // Step 3: Pad the data to make it into 128bit blocks
+    // Step 4: encrypt
+    // Step 5: Either create a new file and write the encrypted data or delete the data on the file and write over it
+    
+
+    bool destructive = false;
+
+    if (argc >= 4) {
+      if (strcmp(argv[3], "-k") == 0) {
+        if (argc < 5) {
+          std::cout << "error: Key not provided!" << std::endl;
+
+          return -1;
+        }
+
+        if (not setSecret(argv[4])) {
+          std::cout << "error: The key provided is not a valid key!" << std::endl;
+
+          return -1;
+        }
+
+        if (argc > 5) {
+          if (strcmp(argv[5], "-d") == 0) {
+            destructive = true;
+          }
+          else {
+            std::cout << "error: The argument " << argv[5] << " is invalid!" << std::endl;
+
+            return -1;
+          }
+          
+          if (argc > 6) {
+            std::cout << "error: Too many arguments provided!" << std::endl;
+
+            return -1;
+          }
+        }
+      }
+      else if (strcmp(argv[3], "-d") == 0) {
+        destructive = true;
+        if (not getKey()) {
+          std::cout << "error: The default key has not been set yet. Please set that before using this method!" << std::endl;
+
+          return -1;
+        }
+
+        if (argc > 5) {
+          std::cout << "error: Too many arguments provided!" << std::endl;
+
+          return -1;
+        }
+      }
+      else {
+        std::cout << "error: The argument " << argv[3] << " is invalid!" << std::endl;
+
+        return -1;
+      }
+    }
+
+
+
+    std::ifstream file(argv[2], std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+      std::cout << "error: Specified file does not exist!" << std::endl;
+
+      return -1;
+    }
+
+    BYTE* data = nullptr;
+    u64 size = 0;
+    
+    size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    // Auto Padding may be the issue in the future
+    u8 add = 0;
+    if (not (size % 16 == 0)) {
+      add = 16 - size%16;
+      size += add;
+    }
+
+
+    data = new BYTE[size];
+    file.read(reinterpret_cast<char*>(data), size);
+    file.close();
+
+    for (u8 i = 1; i <= add; i++) {
+      data[size-i] = 0;
+    }
+
+    BYTE* encrypted = new BYTE[size];
+
+    encrypt(data, encrypted, size);
+    
+
+    if (destructive) {
+      std::ofstream file_o(argv[2], std::ios::binary);
+      file_o.write(reinterpret_cast<const char*>(encrypted), size);
+      file_o.close();
+
+    }
+    else {
+      std::ofstream file_o(generateUniqueFilename(argv[2]), std::ios::binary);
+      if (!file_o.is_open()) {
+        std::cout << "error: Problems with opening the file!" << std::endl;
+
+        return -1;
+      }
+
+      file_o.write(reinterpret_cast<const char*>(encrypted), size);
+      file_o.close();
+    }
+    
+
+  }
+  else if (strcmp(argv[1], "decrypt") == 0) {
+    if (argc == 2) {
+      std::cout << "error: Too few arguments provided! Try entering a file to encrypt!" << std::endl;
+
+      return -1;
+    }
+
+    std::string filename = argv[2];
+    
+    // Step 0: Check if a key has been provided and if destructive mode has been set
+    // Step 1: Check if file exists
+    // Step 2: Read the binary data of the file in a variable
+    // Step 3: Pad the data to make it into 128bit blocks
+    // Step 4: decrypt
+    // Step 5: Either create a new file and write the encrypted data or delete the data on the file and write over it
+    
+
+    bool destructive = false;
+
+    if (argc >= 4) {
+      if (strcmp(argv[3], "-k") == 0) {
+        if (argc < 5) {
+          std::cout << "error: Key not provided!" << std::endl;
+
+          return -1;
+        }
+
+        if (not setSecret(argv[4])) {
+          std::cout << "error: The key provided is not a valid key!" << std::endl;
+
+          return -1;
+        }
+
+        if (argc > 5) {
+          if (strcmp(argv[5], "-d") == 0) {
+            destructive = true;
+          }
+          else {
+            std::cout << "error: The argument " << argv[5] << " is invalid!" << std::endl;
+
+            return -1;
+          }
+          
+          if (argc > 6) {
+            std::cout << "error: Too many arguments provided!" << std::endl;
+
+            return -1;
+          }
+        }
+      }
+      else if (strcmp(argv[3], "-d") == 0) {
+        destructive = true;
+        if (not getKey()) {
+          std::cout << "error: The default key has not been set yet. Please set that before using this method!" << std::endl;
+
+          return -1;
+        }
+
+        if (argc > 5) {
+          std::cout << "error: Too many arguments provided!" << std::endl;
+
+          return -1;
+        }
+      }
+      else {
+        std::cout << "error: The argument " << argv[3] << " is invalid!" << std::endl;
+
+        return -1;
+      }
+    }
+
+    std::ifstream file(argv[2], std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+      std::cout << "error: Specified file does not exist!" << std::endl;
+
+      return -1;
+    }
+
+    BYTE* data = nullptr;
+    u64 size = 0;
+    
+    size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    data = new BYTE[size];
+    file.read(reinterpret_cast<char*>(data), size);
+    file.close();
+
+    BYTE* decrypted = new BYTE[size];
+
+    decrypt(data, decrypted, size);
+    
+
+    if (destructive) {
+      std::ofstream file_o(argv[2], std::ios::binary);
+      file_o.write(reinterpret_cast<const char*>(decrypted), size);
+      file_o.close();
+
+    }
+    else {
+      std::ofstream file_o(generateUniqueFilename(argv[2]), std::ios::binary);
+      if (!file_o.is_open()) {
+        std::cout << "error: Problems with opening the file!" << std::endl;
+
+        return -1;
+      }
+
+      file_o.write(reinterpret_cast<const char*>(decrypted), size);
+      file_o.close();
+    }
+  }
+  else {
+    if (strcmp(argv[1], "-v") == 0) {
+      std::cout << "Krypte encryption/decryptio software v0.1.0" << std::endl;
+
+      return 0;
+    }
+    else if (strcmp(argv[1], "-h") == 0) {
+      std::cout << "Usage: krypte encrypt <filename> -k <secret_key>" << "\n";
+      std::cout << "Modes: " << "\n" << "\tencrypt - used to encrypt files" << "\n"
+                                     << "\tdecrypt - used to decrypt files" << "\n";
+      std::cout << "Options:" << "\n"
+                << "\t-v       - shows the version of the software" << "\n"
+                << "\t-h       - prints this help screen" << "\n"
+                << "\t-genkey  - used to create a default secret key for encryption/decryption without providing a key everytime" << "\n"
+                << "\t-setkey  - used to set the default secret key for encryption/decryption without providing a key everytime" << "\n"
+                << "\t-k <key> - used to provide a 128bit key for the current encryption/decryption of the file" << "\n"
+                << "\t-d       - used to set the mode to destryctive meaning that the file provided will be erased and will be filled with the content of the encryption/decryption" << "\n";
+
+      std::cout << std::endl;
+
+      return 0;
+    }
+    else {
+      std::cout << "error: The argument " << argv[1] << " is invalid!" << std::endl;
+
+      return -1;
+    }
+  }
+
+
+  return 0; 
 }
 

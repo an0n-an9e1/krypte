@@ -1,5 +1,8 @@
 all:
-	g++ main.cpp -o encrypt -g -Wall
+	g++ main.cpp -o krypte -g -Wall
 
 run:
 	./encrypt
+
+install:
+	mv krypte /usr/bin
